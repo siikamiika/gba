@@ -26,6 +26,8 @@ fn main() {
     gba.tick();
     gba.tick();
     gba.tick();
+    gba.tick();
+    gba.tick();
 }
 
 

@@ -6,7 +6,7 @@ use super::registers::{Registers, Register};
 pub struct ARM7TDMI {
     state: State,
     pub registers: Registers,
-    mode: Rc<RefCell<Mode>>,
+    pub mode: Rc<RefCell<Mode>>,
 }
 
 impl ARM7TDMI {
@@ -21,7 +21,9 @@ impl ARM7TDMI {
 
     fn set_mode(&mut self, mode: Mode) {
         let mode_bits = mode.clone() as u32;
-        self.registers.write(mode_bits , Register::Cpsr);
+        let mut cpsr = self.registers.read(Register::Cpsr);
+        cpsr = cpsr - (cpsr & (1 << 5) - 1) + mode_bits;
+        self.registers.write(cpsr, Register::Cpsr);
 
         *self.mode.borrow_mut() = mode;
     }

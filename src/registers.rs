@@ -1,6 +1,5 @@
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::ops::Index;
 
 use super::cpu::Mode;
 
@@ -68,7 +67,7 @@ impl Registers {
             sp:     BankedRegister::new(banks_all.clone()),
             lr:     BankedRegister::new(banks_all.clone()),
             pc:     SimpleRegister::new(),
-            cpsr:   SimpleRegister::new(),
+            cpsr:   cpsr,
             spsr:   BankedRegister::new(banks_all.clone()),
             mode:   mode,
         }
@@ -181,24 +180,24 @@ impl Registers {
 
 // register enum
 pub enum Register {
-    R0,
-    R1,
-    R2,
-    R3,
-    R4,
-    R5,
-    R6,
-    R7,
-    R8,
-    R9,
-    R10,
-    R11,
-    R12,
-    Sp,
-    Lr,
-    Pc,
-    Cpsr,
-    Spsr,
+    R0   = 0,
+    R1   = 1,
+    R2   = 2,
+    R3   = 3,
+    R4   = 4,
+    R5   = 5,
+    R6   = 6,
+    R7   = 7,
+    R8   = 8,
+    R9   = 9,
+    R10  = 10,
+    R11  = 11,
+    R12  = 12,
+    Sp   = 13,
+    Lr   = 14,
+    Pc   = 15,
+    Cpsr = 16,
+    Spsr = 17,
 }
 
 // PSR bits
@@ -237,7 +236,7 @@ pub enum PsrBit {
 // ------------------------------------------------------------------------- //
 
 // register traits
-trait Read {
+pub trait Read {
     fn read(&self, bank: &Mode) -> u32;
 
     fn read_bits(&self, bits: Vec<u8>, bank: &Mode) -> Vec<bool> {
@@ -256,13 +255,12 @@ trait Read {
     }
 }
 
-trait Write: Read {
+pub trait Write: Read {
     fn write(&mut self, val: u32, bank: &Mode);
 
     fn write_bits(&mut self, bits: Vec<(u8, bool)>, bank: &Mode) {
         let mut val = self.read(bank);
         for (bit, bit_val) in bits {
-            println!("{:?} {}", bit, bit_val);
             if bit_val {
                 val |= 0b1 << bit
             } else {

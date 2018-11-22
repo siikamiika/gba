@@ -4,7 +4,7 @@ use std::fs::File;
 use super::cpu::ARM7TDMI;
 use super::memory::Memory;
 use super::arm_instructions::decode_instruction;
-use super::registers::Register;
+use super::registers::{Register, Read as Read_};
 
 pub struct Gba {
     cpu: ARM7TDMI,
@@ -32,6 +32,10 @@ impl Gba {
         let pc_val = self.cpu.registers.read(Register::Pc);
         let raw_instruction = self.memory.read_word(pc_val as usize);
         let instruction = decode_instruction(raw_instruction);
+        println!("sp:   {:#010x}", self.cpu.registers.sp.read(&self.cpu.mode.borrow()));
+        println!("lr:   {:#034b}", self.cpu.registers.lr.read(&self.cpu.mode.borrow()));
+        println!("pc:   {:#010x}", self.cpu.registers.pc.read(&self.cpu.mode.borrow()));
+        println!("cpsr: {:#034b}", self.cpu.registers.cpsr.read(&self.cpu.mode.borrow()));
         println!("{:?}", instruction);
         self.cpu.execute_arm(instruction);
     }
