@@ -85,42 +85,64 @@ impl ARM7TDMI {
         let shift_type = (op2 >> 5) & 0b11;
         let shift;
         if op2 & 0b1_0000 == 0b1_0000 {
-            shift = self.registers.index((op2 >> 8) & 0xf);
+            shift = self.registers.index((op2 >> 8) & 0xff);
+            // special case
+            if shift == 0 {
+                return rm_val
+            }
         } else {
             shift = op2 >> 7;
         }
-        let mut c = false;
+        let mut c = self.registers.read_cpsr_bits(vec![C])[0];
         let result = match shift_type {
+            // LSL
             0b00 => {
-                c = rm_val >> (32 - shift) == 1;
-                rm_val << shift
-            },
-            0b01 => {
-                if shift == 0 {
-                    c = rm_val >> 31 == 1;
-                }
-                rm_val >> shift
-            },
-            0b10 => {
-                let out: u32;
-                if shift == 0 {
-                    c = rm_val >> 31 == 1;
-                    out = if c {
-                        0xffffffff
-                    } else {
-                        0
-                    };
+                let mut out = 0;
+                if shift == 32 {
+                    c = rm_val & 0b1 == 1;
+                    out = 0;
+                } else if shift < 32 {
+                    c = rm_val >> (31 - shift) == 1;
+                    out = rm_val << shift;
                 } else {
-                    out = ((rm_val as i32) >> shift) as u32;
+                    c = false;
                 }
                 out
             },
+            // LSR
+            0b01 => {
+                let mut out = 0;
+                if shift == 0 || shift == 32 {
+                    c = rm_val >> 31 == 1;
+                } else if shift > 32 {
+                    c = false;
+                } else {
+                    c = (rm_val >> shift - 1) & 0b1 == 1;
+                    out = rm_val >> shift;
+                }
+                out
+            },
+            // ASR
+            0b10 => {
+                let mut shift = shift;
+                if shift == 0 || shift >= 32 {
+                    c = rm_val >> 31 == 1;
+                    shift = 31;
+                } else {
+                    c = (rm_val >> shift - 1) & 0b1 == 1;
+                }
+                ((rm_val as i32) >> shift) as u32
+            },
+            // ROR
             0b11 => {
                 let out: u32;
+                // TODO: wrong timing?
+                let shift = shift % 32;
                 if shift == 0 {
                     c = rm_val >> 31 == 1;
-                    out = ((self.registers.read_cpsr_bits(vec![C])[0] as u32) << 31) + (rm_val >> 1);
+                    out = ((c as u32) << 31) + (rm_val >> 1);
                 } else {
+                    c = (rm_val >> shift - 1) & 0b1 == 1;
                     out = rm_val.rotate_right(shift)
                 }
                 out
@@ -140,130 +162,108 @@ impl ARM7TDMI {
 
     fn arm_shift_op2_imm(&self, op2: u32) -> u32 {
         let imm_val = op2 & 0xff;
-        imm_val
+        let rot = op2 >> 8;
+        imm_val.rotate_right(rot * 2)
     }
 
     // ------------------------------------------------------------------------- //
 
-    // TODO: unimplemented
-    fn exec_arm_and(&mut self, cond: Condition, i: bool, s: bool, rn: u32, rd: u32, mut op2: u32) {
+    fn exec_arm_data_proc(&mut self, f: &Fn(u32, u32) -> u32, cond: Condition, i: bool, s: bool, rn: u32, rd: u32, mut op2: u32) {
         use self::PsrBit::*;
         if !self.arm_condition_true(cond) {return};
 
         if i  {
-            // immediate value with rotate
+            op2 = self.arm_shift_op2_imm(op2);
         } else {
             op2 = self.arm_shift_op2_reg(op2, s);
         }
 
-        let result = self.registers.index(rn) & op2;
+        let result = f(self.registers.index(rn), op2);
         if s {
             let n = result > 0x7fffffff;
             let z = result == 0;
             self.registers.write_cpsr_bits(vec![(Z, z), (N, n)]);
         }
+        if rd == 15 {
+            self.registers.write(self.registers.read(Register::Spsr), Register::Cpsr);
+        }
         self.registers.index_write(result, rd);
     }
 
-    // TODO: unimplemented
+    fn exec_arm_and(&mut self, cond: Condition, i: bool, s: bool, rn: u32, rd: u32, op2: u32) {
+        self.exec_arm_data_proc(&|rn, op2| {rn & op2}, cond, i, s, rn, rd, op2);
+    }
+
     fn exec_arm_eor(&mut self, cond: Condition, i: bool, s: bool, rn: u32, rd: u32, op2: u32) {
-        if !self.arm_condition_true(cond) {return};
+        self.exec_arm_data_proc(&|rn, op2| {rn ^ op2}, cond, i, s, rn, rd, op2);
     }
 
-    // TODO: unimplemented
     fn exec_arm_sub(&mut self, cond: Condition, i: bool, s: bool, rn: u32, rd: u32, op2: u32) {
-        if !self.arm_condition_true(cond) {return};
+        self.exec_arm_data_proc(&|rn, op2| {rn - op2}, cond, i, s, rn, rd, op2);
     }
 
-    // TODO: unimplemented
     fn exec_arm_rsb(&mut self, cond: Condition, i: bool, s: bool, rn: u32, rd: u32, op2: u32) {
-        if !self.arm_condition_true(cond) {return};
+        self.exec_arm_data_proc(&|rn, op2| {op2 - rn}, cond, i, s, rn, rd, op2);
     }
 
-    // TODO: unimplemented
     fn exec_arm_add(&mut self, cond: Condition, i: bool, s: bool, rn: u32, rd: u32, op2: u32) {
-        if !self.arm_condition_true(cond) {return};
+        self.exec_arm_data_proc(&|rn, op2| {rn + op2}, cond, i, s, rn, rd, op2);
     }
 
-    // TODO: unimplemented
     fn exec_arm_adc(&mut self, cond: Condition, i: bool, s: bool, rn: u32, rd: u32, op2: u32) {
-        if !self.arm_condition_true(cond) {return};
+        let c = self.registers.read_cpsr_bits(vec![self::PsrBit::C])[0] as u32;
+        self.exec_arm_data_proc(&|rn, op2| {rn + op2 + c}, cond, i, s, rn, rd, op2);
     }
 
-    // TODO: unimplemented
     fn exec_arm_sbc(&mut self, cond: Condition, i: bool, s: bool, rn: u32, rd: u32, op2: u32) {
-        if !self.arm_condition_true(cond) {return};
+        let c = self.registers.read_cpsr_bits(vec![self::PsrBit::C])[0] as u32;
+        self.exec_arm_data_proc(&|rn, op2| {rn + op2 - 1 + c}, cond, i, s, rn, rd, op2);
     }
 
-    // TODO: unimplemented
     fn exec_arm_rsc(&mut self, cond: Condition, i: bool, s: bool, rn: u32, rd: u32, op2: u32) {
-        if !self.arm_condition_true(cond) {return};
+        let c = self.registers.read_cpsr_bits(vec![self::PsrBit::C])[0] as u32;
+        self.exec_arm_data_proc(&|rn, op2| {op2 + rn - 1 + c}, cond, i, s, rn, rd, op2);
     }
 
-    // TODO: unimplemented
     fn exec_arm_tst(&mut self, cond: Condition, i: bool, s: bool, rn: u32, rd: u32, op2: u32) {
-        if !self.arm_condition_true(cond) {return};
+        let rd_val = self.registers.index(rd);
+        self.exec_arm_data_proc(&|rn, op2| {rn & op2}, cond, i, s, rn, rd, op2);
+        self.registers.index_write(rd_val, rd);
     }
 
-    // TODO: unimplemented
     fn exec_arm_teq(&mut self, cond: Condition, i: bool, s: bool, rn: u32, rd: u32, op2: u32) {
-        if !self.arm_condition_true(cond) {return};
+        let rd_val = self.registers.index(rd);
+        self.exec_arm_data_proc(&|rn, op2| {rn ^ op2}, cond, i, s, rn, rd, op2);
+        self.registers.index_write(rd_val, rd);
     }
 
-    // TODO: incomplete
     fn exec_arm_cmp(&mut self, cond: Condition, i: bool, s: bool, rn: u32, rd: u32, op2: u32) {
-        use self::PsrBit::*;
-        if !self.arm_condition_true(cond) {return};
-
-        if i  {
-            // immediate value with rotate
-        } else {
-            // register with shift
-        }
-
-        let cmp = self.registers.index(rn) - op2;
-
-        if s {
-            let v = cmp >> 31 == 1;
-            let c = cmp >> 31 == 1; // TODO: wrong
-            let z = cmp == 0;
-            let n = cmp >> 31 == 1; // ?
-            self.registers.write_cpsr_bits(vec![(V, v), (C, c), (Z, z), (N, n)]);
-        }
+        let rd_val = self.registers.index(rd);
+        self.exec_arm_data_proc(&|rn, op2| {rn - op2}, cond, i, s, rn, rd, op2);
+        self.registers.index_write(rd_val, rd);
     }
 
 
-    // TODO: unimplemented
     fn exec_arm_cmn(&mut self, cond: Condition, i: bool, s: bool, rn: u32, rd: u32, op2: u32) {
-        if !self.arm_condition_true(cond) {return};
+        let rd_val = self.registers.index(rd);
+        self.exec_arm_data_proc(&|rn, op2| {rn + op2}, cond, i, s, rn, rd, op2);
+        self.registers.index_write(rd_val, rd);
     }
 
-    // TODO: unimplemented
     fn exec_arm_orr(&mut self, cond: Condition, i: bool, s: bool, rn: u32, rd: u32, op2: u32) {
-        if !self.arm_condition_true(cond) {return};
+        self.exec_arm_data_proc(&|rn, op2| {rn | op2}, cond, i, s, rn, rd, op2);
     }
 
-    // TODO: incomplete
     fn exec_arm_mov(&mut self, cond: Condition, i: bool, s: bool, rn: u32, rd: u32, op2: u32) {
-        if !self.arm_condition_true(cond) {return};
-
-        if i  {
-            // immediate value with rotate
-        } else {
-            // register with shift
-        }
-
-        self.registers.index_write(op2, rd);
+        self.exec_arm_data_proc(&|_, op2| {op2}, cond, i, s, rn, rd, op2);
     }
 
-    // TODO: unimplemented
     fn exec_arm_bic(&mut self, cond: Condition, i: bool, s: bool, rn: u32, rd: u32, op2: u32) {
-        if !self.arm_condition_true(cond) {return};
+        self.exec_arm_data_proc(&|rn, op2| {rn & !op2}, cond, i, s, rn, rd, op2);
     }
 
-    // TODO: unimplemented
     fn exec_arm_mvn(&mut self, cond: Condition, i: bool, s: bool, rn: u32, rd: u32, op2: u32) {
-        if !self.arm_condition_true(cond) {return};
+        self.exec_arm_data_proc(&|_, op2| {0xffffffff ^ op2}, cond, i, s, rn, rd, op2);
     }
 
     // TODO: two's complement

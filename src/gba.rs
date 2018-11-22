@@ -36,6 +36,7 @@ impl Gba {
         println!("lr:   {:#034b}", self.cpu.registers.lr.read(&self.cpu.mode.borrow()));
         println!("pc:   {:#010x}", self.cpu.registers.pc.read(&self.cpu.mode.borrow()));
         println!("cpsr: {:#034b}", self.cpu.registers.cpsr.read(&self.cpu.mode.borrow()));
+        println!("spsr: {:#034b}", self.cpu.registers.spsr.read(&self.cpu.mode.borrow()));
         println!("{:?}", instruction);
         self.cpu.execute_arm(instruction);
     }
