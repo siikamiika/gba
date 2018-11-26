@@ -32,7 +32,7 @@ impl Gba {
 
     pub fn tick(&mut self) {
         let pc_val = self.cpu.registers.read(Register::Pc);
-        let raw_instruction = self.memory.borrow().read_word((pc_val - 4) as usize);
+        let raw_instruction = self.memory.borrow().read_word((pc_val) as usize);
         let instruction = decode_instruction(raw_instruction);
         println!("r0:   {:#010x}", self.cpu.registers.r0.read(&self.cpu.mode.borrow()));
         println!("r1:   {:#010x}", self.cpu.registers.r1.read(&self.cpu.mode.borrow()));

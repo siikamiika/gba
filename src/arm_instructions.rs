@@ -83,11 +83,11 @@ impl ARM7TDMI {
 
     fn arm_shift_op2_reg(&mut self, op2: u32, s: bool) -> u32 {
         use self::PsrBit::*;
-        let rm_val = self.registers.index(op2 & 0xf);
+        let rm_val = self.registers.index_instr(op2 & 0xf);
         let shift_type = (op2 >> 5) & 0b11;
         let shift;
         if op2 & 0b1_0000 == 0b1_0000 {
-            shift = self.registers.index((op2 >> 8) & 0xff);
+            shift = self.registers.index_instr((op2 >> 8) & 0xff);
             // special case
             if shift == 0 {
                 return rm_val
@@ -178,16 +178,16 @@ impl ARM7TDMI {
             op2 = self.arm_shift_op2_reg(op2, s);
         }
 
-        let result = f(self.registers.index(rn), op2);
+        let result = f(self.registers.index_instr(rn), op2);
         if s {
             let n = result > 0x7fffffff;
             let z = result == 0;
             self.registers.write_cpsr_bits(vec![(Z, z), (N, n)]);
         }
         if rd == 15 {
-            self.registers.write(self.registers.read(Register::Spsr), Register::Cpsr);
+            self.registers.write_instr(self.registers.read_instr(Register::Spsr), Register::Cpsr);
         }
-        self.registers.index_write(result, rd);
+        self.registers.index_write_instr(result, rd);
     }
 
     // ------------------------------------------------------------------------- //
@@ -228,28 +228,28 @@ impl ARM7TDMI {
     }
 
     fn exec_arm_tst(&mut self, cond: Condition, i: bool, s: bool, rn: u32, rd: u32, op2: u32) {
-        let rd_val = self.registers.index(rd);
+        let rd_val = self.registers.index_instr(rd);
         self.exec_arm_data_proc(&|rn, op2| {rn & op2}, cond, i, s, rn, rd, op2);
-        self.registers.index_write(rd_val, rd);
+        self.registers.index_write_instr(rd_val, rd);
     }
 
     fn exec_arm_teq(&mut self, cond: Condition, i: bool, s: bool, rn: u32, rd: u32, op2: u32) {
-        let rd_val = self.registers.index(rd);
+        let rd_val = self.registers.index_instr(rd);
         self.exec_arm_data_proc(&|rn, op2| {rn ^ op2}, cond, i, s, rn, rd, op2);
-        self.registers.index_write(rd_val, rd);
+        self.registers.index_write_instr(rd_val, rd);
     }
 
     fn exec_arm_cmp(&mut self, cond: Condition, i: bool, s: bool, rn: u32, rd: u32, op2: u32) {
-        let rd_val = self.registers.index(rd);
+        let rd_val = self.registers.index_instr(rd);
         self.exec_arm_data_proc(&|rn, op2| {rn - op2}, cond, i, s, rn, rd, op2);
-        self.registers.index_write(rd_val, rd);
+        self.registers.index_write_instr(rd_val, rd);
     }
 
 
     fn exec_arm_cmn(&mut self, cond: Condition, i: bool, s: bool, rn: u32, rd: u32, op2: u32) {
-        let rd_val = self.registers.index(rd);
+        let rd_val = self.registers.index_instr(rd);
         self.exec_arm_data_proc(&|rn, op2| {rn + op2}, cond, i, s, rn, rd, op2);
-        self.registers.index_write(rd_val, rd);
+        self.registers.index_write_instr(rd_val, rd);
     }
 
     fn exec_arm_orr(&mut self, cond: Condition, i: bool, s: bool, rn: u32, rd: u32, op2: u32) {
@@ -274,24 +274,24 @@ impl ARM7TDMI {
         let sign = (offset << 8) & 0x8000_0000;
         let offset = sign + ((offset & 0x7f_ffff) << 2);
 
-        let old_pc = self.registers.read(Register::Pc) + 4;
+        let old_pc = self.registers.read_instr(Register::Pc) + 4;
         if l {
-            self.registers.write(old_pc & !0b11, Register::Lr);
+            self.registers.write_instr(old_pc & !0b11, Register::Lr);
         }
-        self.registers.write(old_pc + offset, Register::Pc);
+        self.registers.write_instr(old_pc + offset, Register::Pc);
     }
 
     // TODO: Thumb
     fn exec_arm_bx(&mut self, cond: Condition, rn: u32) {
         if !self.arm_condition_true(cond) {return};
 
-        let rn_val = self.registers.index(rn);
+        let rn_val = self.registers.index_instr(rn);
 
         if rn_val & 0b1 == 1 {
-            self.registers.write((rn_val & !0b1) + 2, Register::Pc);
+            self.registers.write_instr((rn_val & !0b1) + 2, Register::Pc);
             panic!("Thumb unimplemented!");
         } else {
-            self.registers.write((rn_val & !0b11) + 4, Register::Pc);
+            self.registers.write_instr((rn_val & !0b11) + 4, Register::Pc);
         }
     }
 
@@ -317,7 +317,7 @@ impl ARM7TDMI {
             // if offset & 0b1_0000 == 0 {
             offset = self.arm_shift_op2_reg(offset, false);
             // } else {
-            //     offset = self.registers.index(offset & 0xf);
+            //     offset = self.registers_instr.index(offset & 0xf);
             // }
         }
 
@@ -329,18 +329,23 @@ impl ARM7TDMI {
             oper = &Sub::sub;
         }
 
-        let address;
+        let mut address;
 
         // pre-index
         if p {
-            address = oper(self.registers.index(rn), offset) & !0b11;
+            address = oper(self.registers.index_instr(rn), offset) & !0b11;
             if w {
-                self.registers.index_write(address, rn);
+                self.registers.index_write_instr(address, rn);
             }
         // post-index
         } else {
-            address = self.registers.index(rn) & !0b11;
-            self.registers.index_write(oper(address, offset), rn);
+            address = self.registers.index_instr(rn) & !0b11;
+            self.registers.index_write_instr(oper(address, offset), rn);
+        }
+
+        // add one word if pc
+        if rn == 15 {
+            address += 4;
         }
 
         // byte
@@ -348,10 +353,10 @@ impl ARM7TDMI {
             // load
             if l {
                 let val = self.memory.borrow().read_byte(address as usize);
-                self.registers.index_write(val as u32, rd);
+                self.registers.index_write_instr(val as u32, rd);
             // store
             } else {
-                let val = self.registers.index(rd) as u8;
+                let val = self.registers.index_instr(rd) as u8;
                 self.memory.borrow_mut().write_byte(val, address as usize);
             }
         // word
@@ -359,10 +364,10 @@ impl ARM7TDMI {
             // load
             if l {
                 let val = self.memory.borrow().read_word(address as usize);
-                self.registers.index_write(val as u32, rd);
+                self.registers.index_write_instr(val as u32, rd);
             // store
             } else {
-                let val = self.registers.index(rd);
+                let val = self.registers.index_instr(rd);
                 self.memory.borrow_mut().write_word(val, address as usize);
             }
         }
@@ -377,18 +382,18 @@ impl ARM7TDMI {
 
         let psr_val: u32;
         if ps {
-            psr_val = self.registers.read(Register::Spsr);
+            psr_val = self.registers.read_instr(Register::Spsr);
         } else {
-            psr_val = self.registers.read(Register::Cpsr);
+            psr_val = self.registers.read_instr(Register::Cpsr);
         }
 
-        self.registers.index_write(psr_val, rd);
+        self.registers.index_write_instr(psr_val, rd);
     }
 
     fn exec_arm_msr(&mut self, cond: Condition, i: bool, pd: bool, f: bool, op: u32) {
         if !self.arm_condition_true(cond) {return};
 
-        let rm_val = self.registers.index(op & 0xf);
+        let rm_val = self.registers.index_instr(op & 0xf);
 
         let psr_val = if i {
             self.arm_shift_op2_imm(op)
@@ -397,18 +402,18 @@ impl ARM7TDMI {
         };
 
         if pd {
-            let old = self.registers.read(Register::Spsr);
+            let old = self.registers.read_instr(Register::Spsr);
             if f {
-                self.registers.write(old & 0x0fffffff | psr_val, Register::Spsr);
+                self.registers.write_instr(old & 0x0fffffff | psr_val, Register::Spsr);
             } else {
-                self.registers.write(psr_val, Register::Spsr);
+                self.registers.write_instr(psr_val, Register::Spsr);
             }
         } else {
-            let old = self.registers.read(Register::Cpsr);
+            let old = self.registers.read_instr(Register::Cpsr);
             if f {
-                self.registers.write(old & 0x0fffffff | psr_val, Register::Cpsr);
+                self.registers.write_instr(old & 0x0fffffff | psr_val, Register::Cpsr);
             } else {
-                self.registers.write(psr_val, Register::Cpsr);
+                self.registers.write_instr(psr_val, Register::Cpsr);
             }
         }
     }

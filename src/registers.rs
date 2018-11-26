@@ -43,9 +43,6 @@ impl Registers {
         let banks_fiq = ActiveBanks::new(vec![1]);
         let banks_all = ActiveBanks::new(vec![1, 2, 3, 4, 5]);
 
-        let mut pc = SimpleRegister::new();
-        pc.write(4, &mode.borrow());
-
         let mut cpsr = SimpleRegister::new();
         let mode_bits = mode.borrow().clone() as u32;
         cpsr.write(mode_bits , &mode.borrow());
@@ -70,7 +67,7 @@ impl Registers {
             r12:    BankedRegister::new(banks_fiq.clone()),
             sp:     BankedRegister::new(banks_all.clone()),
             lr:     BankedRegister::new(banks_all.clone()),
-            pc:     pc,
+            pc:     SimpleRegister::new(),
             cpsr:   cpsr,
             spsr:   BankedRegister::new(banks_all.clone()),
             mode:   mode,
@@ -98,6 +95,15 @@ impl Registers {
             16 => self.cpsr.read(&self.mode.borrow()),
             17 => self.spsr.read(&self.mode.borrow()),
             _  => panic!(),
+        }
+    }
+
+    pub fn index_instr(&self, register: u32) -> u32 {
+        let result = self.index(register);
+        if register == 15 {
+            result + 4
+        } else {
+            result
         }
     }
 
@@ -129,12 +135,29 @@ impl Registers {
         }
     }
 
+    pub fn index_write_instr(&mut self, mut value: u32, register: u32) {
+        if register == 15 {
+            value += 4;
+        }
+
+        self.index_write(value, register);
+        let result = self.index(register);
+    }
+
     pub fn read(&self, register: Register) -> u32 {
+        self.index(unsafe {transmute(register as u32)})
+    }
+
+    pub fn read_instr(&self, register: Register) -> u32 {
         self.index(unsafe {transmute(register as u32)})
     }
 
     pub fn write(&mut self, value: u32, register: Register) {
         self.index_write(value, unsafe {transmute(register as u32)});
+    }
+
+    pub fn write_instr(&mut self, value: u32, register: Register) {
+        self.index_write_instr(value, unsafe {transmute(register as u32)});
     }
 
     pub fn read_cpsr_bits(&self, bits: Vec<PsrBit>) -> Vec<bool> {
