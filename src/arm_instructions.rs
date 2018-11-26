@@ -1,3 +1,5 @@
+use std::ops::{Add, Sub};
+
 use super::cpu::ARM7TDMI;
 use super::registers::{Register, PsrBit, Read};
 
@@ -30,7 +32,7 @@ impl ARM7TDMI {
             LdrStr{cond, i, p, u, b, w, l, rn, rd, offset} => self.exec_arm_ldrstr(cond, i, p, u, b, w, l, rn, rd, offset),
             LdrStrHalf{cond, p, u, i, w, l, rn, rd, s, h, offset} => self.exec_arm_ldrstrhalf(cond, p, u, i, w, l, rn, rd, s, h, offset),
             Mrs{cond, ps, rd} => self.exec_arm_mrs(cond, ps, rd),
-            Msr{cond, pd, op} => self.exec_arm_msr(cond, pd, op),
+            Msr{cond, i, pd, f, op} => self.exec_arm_msr(cond, i, pd, f, op),
             Mul{cond, a, s, rd, rn, rs, rm} => self.exec_arm_mul(cond, a, s, rd, rn, rs, rm),
             Mull{cond, u, a, s, rd_hi, rd_lo, rn, rm} => self.exec_arm_mull(cond, u, a, s, rd_hi, rd_lo, rn, rm),
             Swi{cond, comment} => self.exec_arm_swi(cond, comment),
@@ -166,8 +168,6 @@ impl ARM7TDMI {
         imm_val.rotate_right(rot * 2)
     }
 
-    // ------------------------------------------------------------------------- //
-
     fn exec_arm_data_proc(&mut self, f: &Fn(u32, u32) -> u32, cond: Condition, i: bool, s: bool, rn: u32, rd: u32, mut op2: u32) {
         use self::PsrBit::*;
         if !self.arm_condition_true(cond) {return};
@@ -189,6 +189,8 @@ impl ARM7TDMI {
         }
         self.registers.index_write(result, rd);
     }
+
+    // ------------------------------------------------------------------------- //
 
     fn exec_arm_and(&mut self, cond: Condition, i: bool, s: bool, rn: u32, rd: u32, op2: u32) {
         self.exec_arm_data_proc(&|rn, op2| {rn & op2}, cond, i, s, rn, rd, op2);
@@ -217,12 +219,12 @@ impl ARM7TDMI {
 
     fn exec_arm_sbc(&mut self, cond: Condition, i: bool, s: bool, rn: u32, rd: u32, op2: u32) {
         let c = self.registers.read_cpsr_bits(vec![self::PsrBit::C])[0] as u32;
-        self.exec_arm_data_proc(&|rn, op2| {rn + op2 - 1 + c}, cond, i, s, rn, rd, op2);
+        self.exec_arm_data_proc(&|rn, op2| {rn - op2 - 1 + c}, cond, i, s, rn, rd, op2);
     }
 
     fn exec_arm_rsc(&mut self, cond: Condition, i: bool, s: bool, rn: u32, rd: u32, op2: u32) {
         let c = self.registers.read_cpsr_bits(vec![self::PsrBit::C])[0] as u32;
-        self.exec_arm_data_proc(&|rn, op2| {op2 + rn - 1 + c}, cond, i, s, rn, rd, op2);
+        self.exec_arm_data_proc(&|rn, op2| {op2 - rn - 1 + c}, cond, i, s, rn, rd, op2);
     }
 
     fn exec_arm_tst(&mut self, cond: Condition, i: bool, s: bool, rn: u32, rd: u32, op2: u32) {
@@ -266,19 +268,31 @@ impl ARM7TDMI {
         self.exec_arm_data_proc(&|_, op2| {0xffffffff ^ op2}, cond, i, s, rn, rd, op2);
     }
 
-    // TODO: two's complement
     fn exec_arm_b(&mut self, cond: Condition, l: bool, offset: u32) {
         if !self.arm_condition_true(cond) {return};
 
+        let sign = (offset << 8) & 0x8000_0000;
+        let offset = sign + ((offset & 0x7f_ffff) << 2);
+
         let old_pc = self.registers.read(Register::Pc) + 4;
         if l {
-            self.registers.write(old_pc, Register::Lr);
+            self.registers.write(old_pc & !0b11, Register::Lr);
         }
-        self.registers.write(old_pc + (offset << 2), Register::Pc);
+        self.registers.write(old_pc + offset, Register::Pc);
     }
 
-    // TODO: unimplemented
+    // TODO: Thumb
     fn exec_arm_bx(&mut self, cond: Condition, rn: u32) {
+        if !self.arm_condition_true(cond) {return};
+
+        let rn_val = self.registers.index(rn);
+
+        if rn_val & 0b1 == 1 {
+            self.registers.write((rn_val & !0b1) + 2, Register::Pc);
+            panic!("Thumb unimplemented!");
+        } else {
+            self.registers.write((rn_val & !0b11) + 4, Register::Pc);
+        }
     }
 
     // TODO: unimplemented
@@ -291,22 +305,112 @@ impl ARM7TDMI {
 
     // TODO: unimplemented
     fn exec_arm_ldmstm(&mut self, cond: Condition, p: bool, u: bool, s: bool, w: bool, l: bool, rn: u32, regs: u32) {
+        if !self.arm_condition_true(cond) {return};
+        // Whenever R15 is stored to memory the stored value is the address of the STM instruction plus 12.
     }
 
-    // TODO: unimplemented
-    fn exec_arm_ldrstr(&mut self, cond: Condition, i: bool, p: bool, u: bool, b: bool, w: bool, l: bool, rn: u32, rd: u32, offset: u32) {
+    fn exec_arm_ldrstr(&mut self, cond: Condition, i: bool, p: bool, u: bool, b: bool, w: bool, l: bool, rn: u32, rd: u32, mut offset: u32) {
+        if !self.arm_condition_true(cond) {return};
+
+        // offset is shifted register
+        if i {
+            // if offset & 0b1_0000 == 0 {
+            offset = self.arm_shift_op2_reg(offset, false);
+            // } else {
+            //     offset = self.registers.index(offset & 0xf);
+            // }
+        }
+
+        // up/down
+        let oper: &Fn(u32, u32) -> u32;
+        if u {
+            oper = &Add::add;
+        } else {
+            oper = &Sub::sub;
+        }
+
+        let address;
+
+        // pre-index
+        if p {
+            address = oper(self.registers.index(rn), offset) & !0b11;
+            if w {
+                self.registers.index_write(address, rn);
+            }
+        // post-index
+        } else {
+            address = self.registers.index(rn) & !0b11;
+            self.registers.index_write(oper(address, offset), rn);
+        }
+
+        // byte
+        if b {
+            // load
+            if l {
+                let val = self.memory.borrow().read_byte(address as usize);
+                self.registers.index_write(val as u32, rd);
+            // store
+            } else {
+                let val = self.registers.index(rd) as u8;
+                self.memory.borrow_mut().write_byte(val, address as usize);
+            }
+        // word
+        } else {
+            // load
+            if l {
+                let val = self.memory.borrow().read_word(address as usize);
+                self.registers.index_write(val as u32, rd);
+            // store
+            } else {
+                let val = self.registers.index(rd);
+                self.memory.borrow_mut().write_word(val, address as usize);
+            }
+        }
     }
 
     // TODO: unimplemented
     fn exec_arm_ldrstrhalf(&mut self, cond: Condition, p: bool, u: bool, i: bool, w: bool, l: bool, rn: u32, rd: u32, s: bool, h: bool, offset: u32) {
     }
 
-    // TODO: unimplemented
     fn exec_arm_mrs(&mut self, cond: Condition, ps: bool, rd: u32) {
+        if !self.arm_condition_true(cond) {return};
+
+        let psr_val: u32;
+        if ps {
+            psr_val = self.registers.read(Register::Spsr);
+        } else {
+            psr_val = self.registers.read(Register::Cpsr);
+        }
+
+        self.registers.index_write(psr_val, rd);
     }
 
-    // TODO: unimplemented
-    fn exec_arm_msr(&mut self, cond: Condition, pd: bool, op: u32) {
+    fn exec_arm_msr(&mut self, cond: Condition, i: bool, pd: bool, f: bool, op: u32) {
+        if !self.arm_condition_true(cond) {return};
+
+        let rm_val = self.registers.index(op & 0xf);
+
+        let psr_val = if i {
+            self.arm_shift_op2_imm(op)
+        } else {
+            rm_val
+        };
+
+        if pd {
+            let old = self.registers.read(Register::Spsr);
+            if f {
+                self.registers.write(old & 0x0fffffff | psr_val, Register::Spsr);
+            } else {
+                self.registers.write(psr_val, Register::Spsr);
+            }
+        } else {
+            let old = self.registers.read(Register::Cpsr);
+            if f {
+                self.registers.write(old & 0x0fffffff | psr_val, Register::Cpsr);
+            } else {
+                self.registers.write(psr_val, Register::Cpsr);
+            }
+        }
     }
 
     // TODO: unimplemented
@@ -416,10 +520,10 @@ pub fn decode_instruction(instr: u32) -> Instruction {
         Mrs {cond: condition, ps: bits[22], rd: nibbles[3]}
     } else if instr & 0b1111_1011_1111_1111_1111_1111_0000 == 0b0001_0010_1001_1111_0000_0000_0000 {
         // MSR (transfer register contents to PSR)
-        Msr {cond: condition, pd: bits[22], op: instr & 0xfff}
+        Msr {cond: condition, i: false, f: false, pd: bits[22], op: instr & 0xfff}
     } else if instr & 0b1101_1011_1111_1111_0000_0000_0000 == 0b0001_0010_1000_1111_0000_0000_0000 {
         // MSR (transfer register contents or immdiate value to PSR flag bits only)
-        Msr {cond: condition, pd: bits[22], op: instr & 0xfff}
+        Msr {cond: condition, i: bits[25], f: !bits[16], pd: bits[22], op: instr & 0xfff}
     } else if instr & 0b1100_0000_0000_0000_0000_0000_0000 == 0b0000_0000_0000_0000_0000_0000_0000 {
         // Data Processing / PSR Transfer
         let op2 = instr & 0xfff;
@@ -694,7 +798,9 @@ pub enum Instruction {
     }, // Move PSR status/flags to register | Rn := PSR
     Msr{
         cond: Condition,
+        i: bool,
         pd: bool,
+        f: bool, // custom: PSR flag bits only
         op: u32,
     }, // Move register to PSR status/flags | PSR := Rm
     Mul{

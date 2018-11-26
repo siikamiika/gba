@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::mem::transmute;
 
 use super::cpu::Mode;
 
@@ -42,6 +43,9 @@ impl Registers {
         let banks_fiq = ActiveBanks::new(vec![1]);
         let banks_all = ActiveBanks::new(vec![1, 2, 3, 4, 5]);
 
+        let mut pc = SimpleRegister::new();
+        pc.write(4, &mode.borrow());
+
         let mut cpsr = SimpleRegister::new();
         let mode_bits = mode.borrow().clone() as u32;
         cpsr.write(mode_bits , &mode.borrow());
@@ -66,7 +70,7 @@ impl Registers {
             r12:    BankedRegister::new(banks_fiq.clone()),
             sp:     BankedRegister::new(banks_all.clone()),
             lr:     BankedRegister::new(banks_all.clone()),
-            pc:     SimpleRegister::new(),
+            pc:     pc,
             cpsr:   cpsr,
             spsr:   BankedRegister::new(banks_all.clone()),
             mode:   mode,
@@ -92,7 +96,7 @@ impl Registers {
             14 => self.lr.read(&self.mode.borrow()),
             15 => self.pc.read(&self.mode.borrow()),
             16 => self.cpsr.read(&self.mode.borrow()),
-             // => self.spsr.read(&self.mode.borrow()),
+            17 => self.spsr.read(&self.mode.borrow()),
             _  => panic!(),
         }
     }
@@ -115,58 +119,22 @@ impl Registers {
             13 => self.sp.write(value,   &self.mode.borrow()),
             14 => self.lr.write(value,   &self.mode.borrow()),
             15 => self.pc.write(value,   &self.mode.borrow()),
-            16 => self.cpsr.write(value, &self.mode.borrow()),
-             // => self.spsr.write(value, &self.mode.borrow()),
+            16 => {
+                self.cpsr.write(value, &self.mode.borrow());
+                *self.mode.borrow_mut() = Mode::from(value & 0b1_1111);
+                println!("Mode switched to: {:?}", &self.mode.borrow());
+            },
+            17 => self.spsr.write(value, &self.mode.borrow()),
             _  => panic!(),
         }
     }
 
     pub fn read(&self, register: Register) -> u32 {
-        use self::Register::*;
-        match register {
-            R0   => self.r0.read(   &self.mode.borrow()),
-            R1   => self.r1.read(   &self.mode.borrow()),
-            R2   => self.r2.read(   &self.mode.borrow()),
-            R3   => self.r3.read(   &self.mode.borrow()),
-            R4   => self.r4.read(   &self.mode.borrow()),
-            R5   => self.r5.read(   &self.mode.borrow()),
-            R6   => self.r6.read(   &self.mode.borrow()),
-            R7   => self.r7.read(   &self.mode.borrow()),
-            R8   => self.r8.read(   &self.mode.borrow()),
-            R9   => self.r9.read(   &self.mode.borrow()),
-            R10  => self.r10.read(  &self.mode.borrow()),
-            R11  => self.r11.read(  &self.mode.borrow()),
-            R12  => self.r12.read(  &self.mode.borrow()),
-            Sp   => self.sp.read(   &self.mode.borrow()),
-            Lr   => self.lr.read(   &self.mode.borrow()),
-            Pc   => self.pc.read(   &self.mode.borrow()),
-            Cpsr => self.cpsr.read( &self.mode.borrow()),
-            Spsr => self.spsr.read( &self.mode.borrow()),
-        }
+        self.index(unsafe {transmute(register as u32)})
     }
 
     pub fn write(&mut self, value: u32, register: Register) {
-        use self::Register::*;
-        match register {
-            R0   => self.r0.write(value,   &self.mode.borrow()),
-            R1   => self.r1.write(value,   &self.mode.borrow()),
-            R2   => self.r2.write(value,   &self.mode.borrow()),
-            R3   => self.r3.write(value,   &self.mode.borrow()),
-            R4   => self.r4.write(value,   &self.mode.borrow()),
-            R5   => self.r5.write(value,   &self.mode.borrow()),
-            R6   => self.r6.write(value,   &self.mode.borrow()),
-            R7   => self.r7.write(value,   &self.mode.borrow()),
-            R8   => self.r8.write(value,   &self.mode.borrow()),
-            R9   => self.r9.write(value,   &self.mode.borrow()),
-            R10  => self.r10.write(value,  &self.mode.borrow()),
-            R11  => self.r11.write(value,  &self.mode.borrow()),
-            R12  => self.r12.write(value,  &self.mode.borrow()),
-            Sp   => self.sp.write(value,   &self.mode.borrow()),
-            Lr   => self.lr.write(value,   &self.mode.borrow()),
-            Pc   => self.pc.write(value,   &self.mode.borrow()),
-            Cpsr => self.cpsr.write(value, &self.mode.borrow()),
-            Spsr => self.spsr.write(value, &self.mode.borrow()),
-        }
+        self.index_write(value, unsafe {transmute(register as u32)});
     }
 
     pub fn read_cpsr_bits(&self, bits: Vec<PsrBit>) -> Vec<bool> {
@@ -337,6 +305,7 @@ impl ActiveBanks {
             Mode::Irq => (self.banks & 0b010000) != 0,
             Mode::Und => (self.banks & 0b100000) != 0,
             Mode::Sys => (self.banks & 0b000001) != 0,
+            Mode::Wtf => (self.banks & 0b000001) != 0,
         }
     }
 }
@@ -375,6 +344,7 @@ impl Read for BankedRegister {
             Mode::Irq => if self.banks.is_active(bank) { self.val_irq } else { self.val_usr },
             Mode::Und => if self.banks.is_active(bank) { self.val_und } else { self.val_usr },
             Mode::Sys => self.val_usr,
+            Mode::Wtf => self.val_usr,
         }
     }
 }
@@ -389,6 +359,7 @@ impl Write for BankedRegister {
             Mode::Irq => if self.banks.is_active(bank) { self.val_irq = val } else { self.val_usr = val },
             Mode::Und => if self.banks.is_active(bank) { self.val_und = val } else { self.val_usr = val },
             Mode::Sys => self.val_usr = val,
+            Mode::Wtf => self.val_usr = val,
         }
     }
 }

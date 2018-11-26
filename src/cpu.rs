@@ -2,20 +2,23 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use super::registers::{Registers, Register};
+use super::memory::Memory;
 
 pub struct ARM7TDMI {
     state: State,
     pub registers: Registers,
     pub mode: Rc<RefCell<Mode>>,
+    pub memory: Rc<RefCell<Memory>>
 }
 
 impl ARM7TDMI {
-    pub fn new() -> Self {
+    pub fn new(memory: Rc<RefCell<Memory>>) -> Self {
         let mode = Rc::new(RefCell::new(Mode::Svc));
         ARM7TDMI {
             state: State::Arm,
             registers: Registers::new(mode.clone()),
             mode: mode,
+            memory: memory,
         }
     }
 
@@ -29,7 +32,7 @@ impl ARM7TDMI {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum Mode {
     Usr = 0b10000,  // user
     Fiq = 0b10001,  // fast interrupt
@@ -38,6 +41,23 @@ pub enum Mode {
     Abt = 0b10111,  // abort
     Und = 0b11011,  // undefined
     Sys = 0b11111,  // system (same as user on the GBA)
+    Wtf,
+}
+
+impl From<u32> for Mode {
+    fn from(num: u32) -> Self {
+        use self::Mode::*;
+        match num {
+            0b10000 => Usr,
+            0b10001 => Fiq,
+            0b10010 => Irq,
+            0b10011 => Svc,
+            0b10111 => Abt,
+            0b11011 => Und,
+            0b11111 => Sys,
+            _       => Wtf,
+        }
+    }
 }
 
 // changed with BX instruction, or automatically to ARM when executing exception
